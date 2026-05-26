@@ -1,15 +1,39 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+import sys
+import os
+import platform
 import serial
 import serial.tools.list_ports
-import threading
-import time
-from typing import List, Tuple
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QGridLayout, QGroupBox, QPushButton, QSlider, QLabel, QComboBox, 
+                             QTextEdit, QTabWidget, QFrame, QSplitter, QStatusBar)
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont, QPalette, QColor
+from typing import List
+
+
+def get_serial_ports():
+    """Получение списка доступных COM-портов"""
+    ports = []
+    for port in serial.tools.list_ports.comports():
+        ports.append(port.device)
+    return ports
+
+
+class VSCodeDarkTheme:
+    """Тема в стиле Visual Studio Code Dark"""
+    BACKGROUND = "#1e1e1e"
+    PANEL_BACKGROUND = "#252526"
+    ACCENT = "#007acc"
+    TEXT = "#d4d4d4"
+    TEXT_SECONDARY = "#9e9e9e"
+    BORDER = "#3c3c3c"
+    HIGHLIGHT = "#2a2d2e"
+    WARNING = "#ffcc00"
+    ERROR = "#f48771"
+
 
 class ThermalCameraController:
-    """
-    Класс для управления тепловизионной камерой MINIR по протоколу RS-232
-    """
+    """Класс для управления тепловизионной камерой MINIR по протоколу RS-232"""
     
     def __init__(self):
         self.serial_port = None
@@ -33,8 +57,8 @@ class ThermalCameraController:
             'image_enhance_off': [0xF0, 0x03, 0x26, 0x0E, 0x00, 0x34, 0xFF],
             'white_hot_on': [0xF0, 0x03, 0x26, 0x05, 0x00, 0x2B, 0xFF],
             'white_hot_off': [0xF0, 0x03, 0x26, 0x05, 0x0F, 0x3A, 0xFF],
-            'agc_on': [0xF0, 0x03, 0x26, 0x13, 0x03, 0x3C, 0xFF],
-            'agc_off': [0xF0, 0x03, 0x26, 0x13, 0x01, 0x3A, 0xFF],
+            'agc_on': [0xF0, 0x03, 0x26, 0x13, 0x03, 0x3C, 0xFF],   # agc on(√)
+            'agc_off': [0xF0, 0x03, 0x26, 0x13, 0x01, 0x3A, 0xFF],  # agc on()
             'two_point_calc': [0xF0, 0x02, 0x26, 0x93, 0xB9, 0xFF],
             'two_point_auto_bpr_save': [0xF0, 0x02, 0x26, 0x94, 0xBA, 0xFF],
             'auto_focus': [0xF0, 0x02, 0x26, 0x34, 0x5A, 0xFF],
@@ -97,7 +121,7 @@ class ThermalCameraController:
                 cmd[5] -= 0x100
             self.gamma_values[f'gamma_{i}'] = cmd
     
-    def connect(self, port: str, baudrate: int = 9600) -> bool:  # Changed to 9600
+    def connect(self, port: str, baudrate: int = 9600) -> bool:
         """Подключение к порту"""
         try:
             self.serial_port = serial.Serial(
@@ -124,356 +148,439 @@ class ThermalCameraController:
         """Отправка команды в порт"""
         if not self.is_connected or not self.serial_port:
             return False
-            
+
         try:
-            # Преобразуем команду в байты
             command_bytes = bytearray(command)
-            
-            # Логируем команду перед отправкой
+            cmd_hex = ' '.join([f'{byte:02X}' for byte in command])
             if log_callback:
-                cmd_hex = ' '.join([f'{byte:02X}' for byte in command])
-                log_callback(f"Отправка команды: {cmd_hex}")
-            
+                log_callback(f"TX: {cmd_hex}")
             self.serial_port.write(command_bytes)
-            
-            # Даем время на выполнение команды
-            time.sleep(0.1)
             return True
         except Exception as e:
             print(f"Ошибка отправки команды: {e}")
-            if log_callback:
-                log_callback(f"Ошибка отправки команды: {e}")
             return False
     
     def calculate_checksum(self, data: List[int]) -> int:
-        """Вычисление контрольной суммы"""
-        checksum = sum(data) & 0xFF
-        return checksum
-    
+        """Вычисление контрольной суммы от оригинальных (не экранированных) данных"""
+        return sum(data) & 0xFF
+
+    @staticmethod
+    def escape_byte(byte: int) -> List[int]:
+        """Экранирование одного байта согласно протоколу MINIR.
+
+        Специальные байты 0xF0, 0xFF, 0xF5 заменяются двухбайтовой
+        последовательностью. Заголовок пакета (F0, len, 26, cmd) и
+        конечный байт (FF) экранированию НЕ подлежат — они фиксированы
+        и никогда не принимают значения F0/FF/F5.
+        """
+        if byte == 0xF0:
+            return [0xF5, 0x00]
+        elif byte == 0xFF:
+            return [0xF5, 0x0F]
+        elif byte == 0xF5:
+            return [0xF5, 0x05]
+        return [byte]
+
+    def build_command(self, cmd_byte: int, value_bytes: List[int]) -> List[int]:
+        """Сборка команды с правильным экранированием согласно протоколу.
+
+        Алгоритм (подтверждён таблицами протокола):
+          1. Данные для контрольной суммы: [0x26, cmd_byte] + value_bytes (оригинальные).
+          2. Контрольная сумма считается от этих оригинальных данных.
+          3. value_bytes и checksum независимо экранируются при необходимости.
+          4. len-байт = len(value_bytes) + 1 (за 0x26) — всегда оригинальная длина,
+             не меняется при экранировании.
+
+        Формат пакета: F0 [len] 26 [cmd] [value_escaped...] [checksum_escaped...] FF
+        """
+        # Шаг 1: оригинальные данные для контрольной суммы
+        checksum_data = [0x26, cmd_byte] + value_bytes
+        checksum = self.calculate_checksum(checksum_data)
+
+        # Шаг 2: len = количество байт после len-поля до checksum (0x26 + cmd + values)
+        pkt_len = 1 + 1 + len(value_bytes)  # 0x26, cmd_byte, value_bytes
+
+        # Шаг 3: экранируем только value_bytes и checksum
+        escaped_values: List[int] = []
+        for b in value_bytes:
+            escaped_values.extend(self.escape_byte(b))
+        escaped_checksum = self.escape_byte(checksum)
+
+        return [0xF0, pkt_len, 0x26, cmd_byte] + escaped_values + escaped_checksum + [0xFF]
+
     def create_brightness_command(self, value: int) -> List[int]:
-        """Создание команды для установки яркости (0-255)"""
+        """Создание команды для установки яркости (0-255).
+        Формат: F0 03 26 0A [value_esc] [checksum_esc] FF
+        """
         if value < 0 or value > 255:
             raise ValueError("Яркость должна быть в диапазоне 0-255")
-        
-        # Формат команды: F0 03 26 0A [значение] [контрольная_сумма] FF
-        data = [0x26, 0x0A, value]
-        checksum = self.calculate_checksum(data)
-        command = [0xF0, 0x03] + data + [checksum, 0xFF]
-        
-        # Применяем экранирование если необходимо
-        return self.escape_command(command)
-    
+        return self.build_command(0x0A, [value])
+
     def create_gain_command(self, value: int) -> List[int]:
-        """Создание команды для установки усиления (0-255)"""
+        """Создание команды для установки усиления (0-255).
+        Формат: F0 03 26 09 [value_esc] [checksum_esc] FF
+        """
         if value < 0 or value > 255:
             raise ValueError("Усиление должно быть в диапазоне 0-255")
-        
-        # Формат команды: F0 03 26 09 [значение] [контрольная_сумма] FF
-        data = [0x26, 0x09, value]
-        checksum = self.calculate_checksum(data)
-        command = [0xF0, 0x03] + data + [checksum, 0xFF]
-        
-        # Применяем экранирование если необходимо
-        return self.escape_command(command)
-    
+        return self.build_command(0x09, [value])
+
     def create_dde_command(self, value: int) -> List[int]:
-        """Создание команды для установки DDE (0-255)"""
+        """Создание команды для установки DDE (0-255).
+        Формат: F0 03 26 77 [value_esc] [checksum_esc] FF
+        """
         if value < 0 or value > 255:
             raise ValueError("DDE должно быть в диапазоне 0-255")
-        
-        # Формат команды: F0 03 26 77 [значение] [контрольная_сумма] FF
-        data = [0x26, 0x77, value]
-        checksum = self.calculate_checksum(data)
-        command = [0xF0, 0x03] + data + [checksum, 0xFF]
-        
-        # Применяем экранирование если необходимо
-        return self.escape_command(command)
-    
+        return self.build_command(0x77, [value])
+
     def create_filter_command(self, value: int) -> List[int]:
-        """Создание команды для установки Spatial Filter (0-255)"""
+        """Создание команды для установки Spatial Filter (0-255).
+        Формат: F0 03 26 78 [value_esc] [checksum_esc] FF
+        """
         if value < 0 or value > 255:
             raise ValueError("Фильтр должен быть в диапазоне 0-255")
-        
-        # Формат команды: F0 03 26 78 [значение] [контрольная_сумма] FF
-        data = [0x26, 0x78, value]
-        checksum = self.calculate_checksum(data)
-        command = [0xF0, 0x03] + data + [checksum, 0xFF]
-        
-        # Применяем экранирование если необходимо
-        return self.escape_command(command)
-    
+        return self.build_command(0x78, [value])
+
     def create_cross_x_command(self, value: int) -> List[int]:
-        """Создание команды для установки координаты X перекрестия (0-701)"""
+        """Создание команды для установки координаты X перекрестия (0-701).
+        Формат: F0 04 26 0B [low_esc] [high_esc] [checksum_esc] FF
+        low_byte = value & 0xFF, high_byte = value >> 8
+        """
         if value < 0 or value > 701:
             raise ValueError("Координата X должна быть в диапазоне 0-701")
-        
-        # Разделяем значение на старший и младший байты
-        high_byte = (value >> 8) & 0xFF
         low_byte = value & 0xFF
-        
-        # Формат команды: F0 04 26 0B [младший_байт] [старший_байт] [контрольная_сумма] FF
-        data = [0x26, 0x0B, low_byte, high_byte]
-        checksum = self.calculate_checksum(data)
-        command = [0xF0, 0x04] + data + [checksum, 0xFF]
-        
-        # Применяем экранирование если необходимо
-        return self.escape_command(command)
-    
+        high_byte = (value >> 8) & 0xFF
+        return self.build_command(0x0B, [low_byte, high_byte])
+
     def create_cross_y_command(self, value: int) -> List[int]:
-        """Создание команды для установки координаты Y перекрестия (0-575)"""
+        """Создание команды для установки координаты Y перекрестия (0-575).
+        Формат: F0 04 26 0C [low_esc] [high_esc] [checksum_esc] FF
+        low_byte = value & 0xFF, high_byte = value >> 8
+        """
         if value < 0 or value > 575:
             raise ValueError("Координата Y должна быть в диапазоне 0-575")
-        
-        # Разделяем значение на старший и младший байты
-        high_byte = (value >> 8) & 0xFF
         low_byte = value & 0xFF
-        
-        # Формат команды: F0 04 26 0C [младший_байт] [старший_байт] [контрольная_сумма] FF
-        data = [0x26, 0x0C, low_byte, high_byte]
-        checksum = self.calculate_checksum(data)
-        command = [0xF0, 0x04] + data + [checksum, 0xFF]
-        
-        # Применяем экранирование если необходимо
-        return self.escape_command(command)
-    
-    def escape_command(self, command: List[int]) -> List[int]:
-        """Применение экранирования к команде согласно протоколу"""
-        # Убираем стартовый и конечный байты для обработки данных
-        start_byte = command[0]
-        end_byte = command[-1]
-        data_part = command[1:-1]  # Все байты между стартом и концом
-        
-        escaped_data = []
-        for byte in data_part:
-            if byte == 0xF0:
-                escaped_data.extend([0xF5, 0x00])
-            elif byte == 0xFF:
-                escaped_data.extend([0xF5, 0x0F])
-            elif byte == 0xF5:
-                escaped_data.extend([0xF5, 0x05])
-            else:
-                escaped_data.append(byte)
-        
-        # Пересчитываем контрольную сумму для экранированных данных
-        new_checksum = self.calculate_checksum([start_byte, len(escaped_data)] + escaped_data)
-        
-        # Собираем команду обратно
-        result = [start_byte, len(escaped_data)] + escaped_data + [new_checksum, end_byte]
-        return result
+        high_byte = (value >> 8) & 0xFF
+        return self.build_command(0x0C, [low_byte, high_byte])
 
 
-class ThermalCameraGUI:
-    """Графический интерфейс для управления тепловизионной камерой"""
+class ConnectionPanel(QWidget):
+    """Панель подключения к термокамере"""
     
-    def __init__(self, root):
-        self.root = root
-        self.root.title("MINIR Термокамера - Контроллер")
-        self.root.geometry("800x900")
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QHBoxLayout(self)
         
-        # Настройка весов для изменения размера окон
-        self.root.grid_rowconfigure(1, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
+        # Порт
+        port_layout = QHBoxLayout()
+        port_layout.addWidget(QLabel("Порт:"))
+        self.port_combo = QComboBox()
+        self.update_ports()
+        port_layout.addWidget(self.port_combo)
         
-        self.controller = ThermalCameraController()
-        self.setup_ui()
+        # Кнопка обновления портов
+        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn.clicked.connect(self.update_ports)
+        port_layout.addWidget(self.refresh_btn)
         
-    def setup_ui(self):
-        """Настройка пользовательского интерфейса"""
-        # Создаем основные фреймы
-        connection_frame = ttk.LabelFrame(self.root, text="Подключение", padding=(10, 5))
-        connection_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
-        connection_frame.grid_columnconfigure(0, weight=1)
+        # Скорость
+        baudrate_layout = QHBoxLayout()
+        baudrate_layout.addWidget(QLabel("Скорость:"))
+        self.baudrate_combo = QComboBox()
+        self.baudrate_combo.addItems(["9600", "19200"])
+        self.baudrate_combo.setCurrentText("9600")
+        baudrate_layout.addWidget(self.baudrate_combo)
         
-        # Панель подключения
-        ttk.Label(connection_frame, text="Порт:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.port_var = tk.StringVar(value="COM1")
-        self.port_combo = ttk.Combobox(connection_frame, textvariable=self.port_var, width=15)
-        self.port_combo.grid(row=0, column=1, padx=(0, 10))
+        # Кнопка подключения
+        self.connect_btn = QPushButton("Подключить")
+        self.connect_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {VSCodeDarkTheme.ACCENT};
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background-color: #005a9e;
+            }}
+        """)
+        baudrate_layout.addWidget(self.connect_btn)
         
-        refresh_btn = ttk.Button(connection_frame, text="Обновить порты", command=self.refresh_ports)
-        refresh_btn.grid(row=0, column=2, padx=(0, 10))
+        layout.addLayout(port_layout)
+        layout.addStretch()
+        layout.addLayout(baudrate_layout)
         
-        # Добавляем выбор скорости передачи
-        ttk.Label(connection_frame, text="Скорость:").grid(row=0, column=3, padx=(10, 5))
-        self.baudrate_var = tk.StringVar(value="9600")
-        self.baudrate_combo = ttk.Combobox(connection_frame, textvariable=self.baudrate_var, width=10, values=["9600", "19200"])
-        self.baudrate_combo.grid(row=0, column=4, padx=(0, 10))
-        
-        self.connect_btn = ttk.Button(connection_frame, text="Подключить", command=self.toggle_connection)
-        self.connect_btn.grid(row=0, column=5)
-        
-        # Обновляем список доступных портов
-        self.refresh_ports()
-        
-        # Основная область с вкладками
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-        self.root.grid_rowconfigure(1, weight=1)
-        
-        # Вкладки
-        self.create_basic_controls_tab()
-        self.create_image_controls_tab()
-        self.create_advanced_controls_tab()
-        self.create_manual_controls_tab()
-        
-        # Логи
-        log_frame = ttk.LabelFrame(self.root, text="Лог", padding=(10, 5))
-        log_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
-        self.root.grid_rowconfigure(2, weight=2)  # Увеличиваем вес для увеличения области логов
-        
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=10)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-        
-    def create_basic_controls_tab(self):
-        """Создание вкладки базовых элементов управления"""
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text="Базовое управление")
-        
+    def update_ports(self):
+        """Обновление списка доступных портов"""
+        self.port_combo.clear()
+        ports = get_serial_ports()
+        self.port_combo.addItems(ports)
+
+
+class ControlTab(QWidget):
+    """Базовый класс для вкладок управления"""
+    
+    def __init__(self, controller, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+        self.layout = QVBoxLayout(self)
+        self.layout.setSpacing(10)
+    
+    def create_button_with_style(self, text, handler):
+        """Создание кнопки с темным стилем"""
+        btn = QPushButton(text)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {VSCodeDarkTheme.HIGHLIGHT};
+                color: {VSCodeDarkTheme.TEXT};
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                padding: 5px 10px;
+                border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background-color: #3a3d3f;
+            }}
+        """)
+        btn.clicked.connect(handler)
+        return btn
+
+    def send_command_safe(self, command_key, display_name):
+        """Безопасная отправка команды — ищет по всем словарям контроллера"""
+        try:
+            c = self.controller
+            for table in (c.commands, c.color_palettes, c.zoom_levels,
+                          c.image_modes, c.flip_modes, c.nuc_tables, c.gamma_values):
+                if command_key in table:
+                    c.send_command(table[command_key], lambda msg: print(msg))
+                    return
+            print(f"Команда '{command_key}' не найдена")
+        except Exception as e:
+            print(f"Ошибка при отправке команды '{display_name}': {e}")
+
+
+class BasicControlsTab(ControlTab):
+    """Вкладка базового управления"""
+    
+    def __init__(self, controller, parent=None):
+        super().__init__(controller, parent)
+        self.init_ui()
+    
+    def init_ui(self):
         # Шторка
-        shutter_frame = ttk.LabelFrame(frame, text="Шторка", padding=(10, 5))
-        shutter_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Button(shutter_frame, text="Открыть шторку", command=self.open_shutter).pack(side=tk.LEFT, padx=5)
-        ttk.Button(shutter_frame, text="Закрыть шторку", command=self.close_shutter).pack(side=tk.LEFT, padx=5)
+        shutter_group = QGroupBox("Шторка")
+        shutter_layout = QHBoxLayout()
+        shutter_layout.addWidget(self.create_button_with_style("Открыть шторку", self.open_shutter))
+        shutter_layout.addWidget(self.create_button_with_style("Закрыть шторку", self.close_shutter))
+        shutter_group.setLayout(shutter_layout)
+        self.layout.addWidget(shutter_group)
         
         # Калибровка
-        calib_frame = ttk.LabelFrame(frame, text="Калибровка", padding=(10, 5))
-        calib_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Button(calib_frame, text="Ручная калибровка", command=self.manual_calibration).pack(side=tk.LEFT, padx=5)
-        ttk.Button(calib_frame, text="Фоновая калибровка", command=self.background_calibration).pack(side=tk.LEFT, padx=5)
-        ttk.Button(calib_frame, text="Авто калибровка ON", command=self.auto_calibration_on).pack(side=tk.LEFT, padx=5)
-        ttk.Button(calib_frame, text="Авто калибровка OFF", command=self.auto_calibration_off).pack(side=tk.LEFT, padx=5)
+        calib_group = QGroupBox("Калибровка")
+        calib_layout = QHBoxLayout()
+        calib_layout.addWidget(self.create_button_with_style("Ручная калибровка", self.manual_calibration))
+        calib_layout.addWidget(self.create_button_with_style("Фоновая калибровка", self.background_calibration))
+        calib_layout.addWidget(self.create_button_with_style("Авто калибровка ON", self.auto_calibration_on))
+        calib_layout.addWidget(self.create_button_with_style("Авто калибровка OFF", self.auto_calibration_off))
+        calib_group.setLayout(calib_layout)
+        self.layout.addWidget(calib_group)
         
         # Сброс и сохранение
-        reset_save_frame = ttk.LabelFrame(frame, text="Сброс и сохранение", padding=(10, 5))
-        reset_save_frame.pack(fill=tk.X, padx=10, pady=5)
+        reset_group = QGroupBox("Сброс и сохранение")
+        reset_layout = QHBoxLayout()
+        reset_layout.addWidget(self.create_button_with_style("Сброс", self.reset))
+        reset_layout.addWidget(self.create_button_with_style("Сохранить параметры", self.save_parameters))
+        reset_layout.addWidget(self.create_button_with_style("Сохранить Calib.data", self.save_calib_data))
+        reset_group.setLayout(reset_layout)
+        self.layout.addWidget(reset_group)
         
-        ttk.Button(reset_save_frame, text="Сброс", command=self.reset).pack(side=tk.LEFT, padx=5)
-        ttk.Button(reset_save_frame, text="Сохранить параметры", command=self.save_parameters).pack(side=tk.LEFT, padx=5)
-        ttk.Button(reset_save_frame, text="Сохранить Calib.data", command=self.save_calib_data).pack(side=tk.LEFT, padx=5)
-        
-    def create_image_controls_tab(self):
-        """Создание вкладки управления изображением"""
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text="Управление изображением")
-        
+        self.layout.addStretch()
+    
+    def open_shutter(self):
+        self.send_command_safe('shutter_open', 'shutter_open')
+    
+    def close_shutter(self):
+        self.send_command_safe('shutter_close', 'shutter_close')
+    
+    def manual_calibration(self):
+        self.send_command_safe('manual_calibration', 'manual_calibration')
+    
+    def background_calibration(self):
+        self.send_command_safe('background_calibration', 'background_calibration')
+    
+    def auto_calibration_on(self):
+        self.send_command_safe('auto_calibration_on', 'auto_calibration_on')
+    
+    def auto_calibration_off(self):
+        self.send_command_safe('auto_calibration_off', 'auto_calibration_off')
+    
+    def reset(self):
+        self.send_command_safe('reset', 'reset')
+    
+    def save_parameters(self):
+        self.send_command_safe('save_parameter', 'save_parameter')
+    
+    def save_calib_data(self):
+        self.send_command_safe('save_calib_data', 'save_calib_data')
+
+
+class ImageControlsTab(ControlTab):
+    """Вкладка управления изображением"""
+    
+    def __init__(self, controller, parent=None):
+        super().__init__(controller, parent)
+        self.init_ui()
+    
+    def init_ui(self):
         # Яркость
-        brightness_frame = ttk.LabelFrame(frame, text="Яркость", padding=(10, 5))
-        brightness_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.brightness_var = tk.IntVar(value=128)
-        brightness_scale = ttk.Scale(brightness_frame, from_=0, to=255, variable=self.brightness_var, orient=tk.HORIZONTAL)
-        brightness_scale.pack(fill=tk.X, padx=5, pady=5)
-        
-        brightness_label = ttk.Label(brightness_frame, text="128")
-        brightness_label.pack()
-        
-        def update_brightness_label(val):
-            brightness_label.config(text=str(int(float(val))))
-            self.set_brightness(int(float(val)))
-        
-        brightness_scale.config(command=update_brightness_label)
+        brightness_group = QGroupBox("Яркость")
+        brightness_layout = QVBoxLayout()
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setRange(0, 255)
+        self.brightness_slider.setValue(128)
+        self.brightness_label = QLabel("128")
+        self.brightness_slider.valueChanged.connect(self.on_brightness_changed)
+        brightness_layout.addWidget(self.brightness_slider)
+        brightness_layout.addWidget(self.brightness_label)
+        brightness_group.setLayout(brightness_layout)
+        self.layout.addWidget(brightness_group)
         
         # Усиление
-        gain_frame = ttk.LabelFrame(frame, text="Усиление", padding=(10, 5))
-        gain_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.gain_var = tk.IntVar(value=128)
-        gain_scale = ttk.Scale(gain_frame, from_=0, to=255, variable=self.gain_var, orient=tk.HORIZONTAL)
-        gain_scale.pack(fill=tk.X, padx=5, pady=5)
-        
-        gain_label = ttk.Label(gain_frame, text="128")
-        gain_label.pack()
-        
-        def update_gain_label(val):
-            gain_label.config(text=str(int(float(val))))
-            self.set_gain(int(float(val)))
-        
-        gain_scale.config(command=update_gain_label)
+        gain_group = QGroupBox("Усиление")
+        gain_layout = QVBoxLayout()
+        self.gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gain_slider.setRange(0, 255)
+        self.gain_slider.setValue(128)
+        self.gain_label = QLabel("128")
+        self.gain_slider.valueChanged.connect(self.on_gain_changed)
+        gain_layout.addWidget(self.gain_slider)
+        gain_layout.addWidget(self.gain_label)
+        gain_group.setLayout(gain_layout)
+        self.layout.addWidget(gain_group)
         
         # DDE
-        dde_frame = ttk.LabelFrame(frame, text="DDE (Dynamic Differential Enhancement)", padding=(10, 5))
-        dde_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.dde_var = tk.IntVar(value=128)
-        dde_scale = ttk.Scale(dde_frame, from_=0, to=255, variable=self.dde_var, orient=tk.HORIZONTAL)
-        dde_scale.pack(fill=tk.X, padx=5, pady=5)
-        
-        dde_label = ttk.Label(dde_frame, text="128")
-        dde_label.pack()
-        
-        def update_dde_label(val):
-            dde_label.config(text=str(int(float(val))))
-            self.set_dde(int(float(val)))
-        
-        dde_scale.config(command=update_dde_label)
+        dde_group = QGroupBox("DDE (Dynamic Differential Enhancement)")
+        dde_layout = QVBoxLayout()
+        self.dde_slider = QSlider(Qt.Orientation.Horizontal)
+        self.dde_slider.setRange(0, 255)
+        self.dde_slider.setValue(128)
+        self.dde_label = QLabel("128")
+        self.dde_slider.valueChanged.connect(self.on_dde_changed)
+        dde_layout.addWidget(self.dde_slider)
+        dde_layout.addWidget(self.dde_label)
+        dde_group.setLayout(dde_layout)
+        self.layout.addWidget(dde_group)
         
         # Spatial Filter
-        filter_frame = ttk.LabelFrame(frame, text="Пространственный фильтр", padding=(10, 5))
-        filter_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.filter_var = tk.IntVar(value=128)
-        filter_scale = ttk.Scale(filter_frame, from_=0, to=255, variable=self.filter_var, orient=tk.HORIZONTAL)
-        filter_scale.pack(fill=tk.X, padx=5, pady=5)
-        
-        filter_label = ttk.Label(filter_frame, text="128")
-        filter_label.pack()
-        
-        def update_filter_label(val):
-            filter_label.config(text=str(int(float(val))))
-            self.set_filter(int(float(val)))
-        
-        filter_scale.config(command=update_filter_label)
+        filter_group = QGroupBox("Пространственный фильтр")
+        filter_layout = QVBoxLayout()
+        self.filter_slider = QSlider(Qt.Orientation.Horizontal)
+        self.filter_slider.setRange(0, 255)
+        self.filter_slider.setValue(128)
+        self.filter_label = QLabel("128")
+        self.filter_slider.valueChanged.connect(self.on_filter_changed)
+        filter_layout.addWidget(self.filter_slider)
+        filter_layout.addWidget(self.filter_label)
+        filter_group.setLayout(filter_layout)
+        self.layout.addWidget(filter_group)
         
         # Перекрестие
-        cross_frame = ttk.LabelFrame(frame, text="Перекрестие", padding=(10, 5))
-        cross_frame.pack(fill=tk.X, padx=10, pady=5)
+        cross_group = QGroupBox("Перекрестие")
+        cross_layout = QGridLayout()
         
-        # Координата X
-        x_frame = ttk.Frame(cross_frame)
-        x_frame.pack(fill=tk.X, pady=2)
+        # X
+        cross_layout.addWidget(QLabel("X:"), 0, 0)
+        self.cross_x_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cross_x_slider.setRange(0, 701)
+        self.cross_x_slider.setValue(320)
+        self.cross_x_label = QLabel("320")
+        cross_layout.addWidget(self.cross_x_slider, 0, 1)
+        cross_layout.addWidget(self.cross_x_label, 0, 2)
+        self.cross_x_slider.valueChanged.connect(self.on_cross_x_changed)
         
-        ttk.Label(x_frame, text="X:").pack(side=tk.LEFT)
-        self.cross_x_var = tk.IntVar(value=320)
-        cross_x_scale = ttk.Scale(x_frame, from_=0, to=701, variable=self.cross_x_var, orient=tk.HORIZONTAL)
-        cross_x_scale.pack(fill=tk.X, expand=True, padx=5)
+        # Y
+        cross_layout.addWidget(QLabel("Y:"), 1, 0)
+        self.cross_y_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cross_y_slider.setRange(0, 575)
+        self.cross_y_slider.setValue(240)
+        self.cross_y_label = QLabel("240")
+        cross_layout.addWidget(self.cross_y_slider, 1, 1)
+        cross_layout.addWidget(self.cross_y_label, 1, 2)
+        self.cross_y_slider.valueChanged.connect(self.on_cross_y_changed)
         
-        cross_x_label = ttk.Label(x_frame, text="320")
-        cross_x_label.pack(side=tk.RIGHT)
+        cross_group.setLayout(cross_layout)
+        self.layout.addWidget(cross_group)
         
-        def update_cross_x_label(val):
-            cross_x_label.config(text=str(int(float(val))))
-            self.set_cross_x(int(float(val)))
-        
-        cross_x_scale.config(command=update_cross_x_label)
-        
-        # Координата Y
-        y_frame = ttk.Frame(cross_frame)
-        y_frame.pack(fill=tk.X, pady=2)
-        
-        ttk.Label(y_frame, text="Y:").pack(side=tk.LEFT)
-        self.cross_y_var = tk.IntVar(value=240)
-        cross_y_scale = ttk.Scale(y_frame, from_=0, to=575, variable=self.cross_y_var, orient=tk.HORIZONTAL)
-        cross_y_scale.pack(fill=tk.X, expand=True, padx=5)
-        
-        cross_y_label = ttk.Label(y_frame, text="240")
-        cross_y_label.pack(side=tk.RIGHT)
-        
-        def update_cross_y_label(val):
-            cross_y_label.config(text=str(int(float(val))))
-            self.set_cross_y(int(float(val)))
-        
-        cross_y_scale.config(command=update_cross_y_label)
-        
-    def create_advanced_controls_tab(self):
-        """Создание вкладки расширенного управления"""
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text="Расширенное управление")
-        
+        self.layout.addStretch()
+    
+    def on_brightness_changed(self, value):
+        self.brightness_label.setText(str(value))
+        if self.controller.is_connected:
+            try:
+                command = self.controller.create_brightness_command(value)
+                self.controller.send_command(command, lambda msg: print(msg))
+            except ValueError as e:
+                print(f"Ошибка: {e}")
+    
+    def on_gain_changed(self, value):
+        self.gain_label.setText(str(value))
+        if self.controller.is_connected:
+            try:
+                command = self.controller.create_gain_command(value)
+                self.controller.send_command(command, lambda msg: print(msg))
+            except ValueError as e:
+                print(f"Ошибка: {e}")
+    
+    def on_dde_changed(self, value):
+        self.dde_label.setText(str(value))
+        if self.controller.is_connected:
+            try:
+                command = self.controller.create_dde_command(value)
+                self.controller.send_command(command, lambda msg: print(msg))
+            except ValueError as e:
+                print(f"Ошибка: {e}")
+    
+    def on_filter_changed(self, value):
+        self.filter_label.setText(str(value))
+        if self.controller.is_connected:
+            try:
+                command = self.controller.create_filter_command(value)
+                self.controller.send_command(command, lambda msg: print(msg))
+            except ValueError as e:
+                print(f"Ошибка: {e}")
+    
+    def on_cross_x_changed(self, value):
+        self.cross_x_label.setText(str(value))
+        if self.controller.is_connected:
+            try:
+                command = self.controller.create_cross_x_command(value)
+                self.controller.send_command(command, lambda msg: print(msg))
+            except ValueError as e:
+                print(f"Ошибка: {e}")
+    
+    def on_cross_y_changed(self, value):
+        self.cross_y_label.setText(str(value))
+        if self.controller.is_connected:
+            try:
+                command = self.controller.create_cross_y_command(value)
+                self.controller.send_command(command, lambda msg: print(msg))
+            except ValueError as e:
+                print(f"Ошибка: {e}")
+
+
+class AdvancedControlsTab(ControlTab):
+    """Вкладка расширенного управления"""
+    
+    def __init__(self, controller, parent=None):
+        super().__init__(controller, parent)
+        self.init_ui()
+    
+    def init_ui(self):
         # Цветовые палитры
-        palette_frame = ttk.LabelFrame(frame, text="Цветовые палитры", padding=(10, 5))
-        palette_frame.pack(fill=tk.X, padx=10, pady=5)
+        palette_group = QGroupBox("Цветовые палитры")
+        palette_layout = QGridLayout()
         
         palettes = [
             ("Color 0", "color0"), ("Color 1", "color1"), ("Color 2", "color2"),
@@ -483,400 +590,386 @@ class ThermalCameraGUI:
         ]
         
         for i, (label, cmd_key) in enumerate(palettes):
-            if i % 4 == 0:  # Начинаем новую строку каждые 4 кнопки
-                row_frame = ttk.Frame(palette_frame)
-                row_frame.pack(fill=tk.X, pady=2)
-            
-            btn = ttk.Button(row_frame, text=label, command=lambda k=cmd_key: self.send_command_by_key(k))
-            btn.pack(side=tk.LEFT, padx=2)
+            row = i // 4
+            col = i % 4
+            btn = self.create_button_with_style(label, lambda checked, k=cmd_key: self.send_palette_command(k))
+            palette_layout.addWidget(btn, row, col)
+        
+        palette_group.setLayout(palette_layout)
+        self.layout.addWidget(palette_group)
         
         # Зум
-        zoom_frame = ttk.LabelFrame(frame, text="Электронный зум", padding=(10, 5))
-        zoom_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Button(zoom_frame, text="1x", command=self.zoom_1x).pack(side=tk.LEFT, padx=5)
-        ttk.Button(zoom_frame, text="2x", command=self.zoom_2x).pack(side=tk.LEFT, padx=5)
-        ttk.Button(zoom_frame, text="4x", command=self.zoom_4x).pack(side=tk.LEFT, padx=5)
+        zoom_group = QGroupBox("Электронный зум")
+        zoom_layout = QHBoxLayout()
+        zoom_layout.addWidget(self.create_button_with_style("1x", self.zoom_1x))
+        zoom_layout.addWidget(self.create_button_with_style("2x", self.zoom_2x))
+        zoom_layout.addWidget(self.create_button_with_style("4x", self.zoom_4x))
+        zoom_group.setLayout(zoom_layout)
+        self.layout.addWidget(zoom_group)
         
         # Режимы изображения
-        mode_frame = ttk.LabelFrame(frame, text="Режимы изображения", padding=(10, 5))
-        mode_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Button(mode_frame, text="L", command=self.mode_L).pack(side=tk.LEFT, padx=5)
-        ttk.Button(mode_frame, text="M", command=self.mode_M).pack(side=tk.LEFT, padx=5)
-        ttk.Button(mode_frame, text="H", command=self.mode_H).pack(side=tk.LEFT, padx=5)
+        mode_group = QGroupBox("Режимы изображения")
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(self.create_button_with_style("L", self.mode_L))
+        mode_layout.addWidget(self.create_button_with_style("M", self.mode_M))
+        mode_layout.addWidget(self.create_button_with_style("H", self.mode_H))
+        mode_group.setLayout(mode_layout)
+        self.layout.addWidget(mode_group)
         
         # Инверсия
-        flip_frame = ttk.LabelFrame(frame, text="Инверсия изображения", padding=(10, 5))
-        flip_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Button(flip_frame, text="Нет", command=self.flip_none).pack(side=tk.LEFT, padx=5)
-        ttk.Button(flip_frame, text="Горизонтально", command=self.flip_h).pack(side=tk.LEFT, padx=5)
-        ttk.Button(flip_frame, text="Вертикально", command=self.flip_v).pack(side=tk.LEFT, padx=5)
-        ttk.Button(flip_frame, text="Оба", command=self.flip_hv).pack(side=tk.LEFT, padx=5)
+        flip_group = QGroupBox("Инверсия изображения")
+        flip_layout = QHBoxLayout()
+        flip_layout.addWidget(self.create_button_with_style("Нет", self.flip_none))
+        flip_layout.addWidget(self.create_button_with_style("Горизонтально", self.flip_h))
+        flip_layout.addWidget(self.create_button_with_style("Вертикально", self.flip_v))
+        flip_layout.addWidget(self.create_button_with_style("Оба", self.flip_hv))
+        flip_group.setLayout(flip_layout)
+        self.layout.addWidget(flip_group)
         
         # Гамма-коррекция
-        gamma_frame = ttk.LabelFrame(frame, text="Гамма-коррекция", padding=(10, 5))
-        gamma_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.gamma_var = tk.IntVar(value=12)
-        gamma_scale = ttk.Scale(gamma_frame, from_=0, to=23, variable=self.gamma_var, orient=tk.HORIZONTAL)
-        gamma_scale.pack(fill=tk.X, padx=5, pady=5)
-        
-        gamma_label = ttk.Label(gamma_frame, text="12")
-        gamma_label.pack()
-        
-        def update_gamma_label(val):
-            gamma_label.config(text=str(int(float(val))))
-            self.set_gamma(int(float(val)))
-        
-        gamma_scale.config(command=update_gamma_label)
+        gamma_group = QGroupBox("Гамма-коррекция")
+        gamma_layout = QVBoxLayout()
+        self.gamma_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gamma_slider.setRange(0, 23)
+        self.gamma_slider.setValue(12)
+        self.gamma_label = QLabel("12")
+        self.gamma_slider.valueChanged.connect(self.on_gamma_changed)
+        gamma_layout.addWidget(self.gamma_slider)
+        gamma_layout.addWidget(self.gamma_label)
+        gamma_group.setLayout(gamma_layout)
+        self.layout.addWidget(gamma_group)
         
         # NUC таблицы
-        nuc_frame = ttk.LabelFrame(frame, text="NUC Таблицы", padding=(10, 5))
-        nuc_frame.pack(fill=tk.X, padx=10, pady=5)
+        nuc_group = QGroupBox("NUC Таблицы")
+        nuc_layout = QHBoxLayout()
+        nuc_layout.addWidget(self.create_button_with_style("Таблица 0", self.nuc_table_0))
+        nuc_layout.addWidget(self.create_button_with_style("Таблица 1", self.nuc_table_1))
+        nuc_layout.addWidget(self.create_button_with_style("Таблица 2", self.nuc_table_2))
+        nuc_group.setLayout(nuc_layout)
+        self.layout.addWidget(nuc_group)
         
-        ttk.Button(nuc_frame, text="Таблица 0", command=self.nuc_table_0).pack(side=tk.LEFT, padx=5)
-        ttk.Button(nuc_frame, text="Таблица 1", command=self.nuc_table_1).pack(side=tk.LEFT, padx=5)
-        ttk.Button(nuc_frame, text="Таблица 2", command=self.nuc_table_2).pack(side=tk.LEFT, padx=5)
-        
-    def create_manual_controls_tab(self):
-        """Создание вкладки ручного управления"""
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text="Ручное управление")
-        
+        self.layout.addStretch()
+    
+    def send_palette_command(self, palette_key):
+        """Безопасная отправка команды цветовой палитры"""
+        try:
+            # Проверяем, что palette_key - строка и имеет правильный формат
+            if not isinstance(palette_key, str):
+                print(f"Недопустимый тип ключа палитры: {type(palette_key)}, значение: {palette_key}")
+                return
+            
+            if palette_key in self.controller.color_palettes:
+                command = self.controller.color_palettes[palette_key]
+                self.controller.send_command(command, lambda msg: print(msg))
+            else:
+                print(f"Цветовая палитра '{palette_key}' не найдена")
+        except Exception as e:
+            print(f"Ошибка при отправке команды цветовой палитры '{palette_key}': {e}")
+    
+    def zoom_1x(self):
+        self.send_command_safe('zoom_1x', 'zoom_1x')
+    
+    def zoom_2x(self):
+        self.send_command_safe('zoom_2x', 'zoom_2x')
+    
+    def zoom_4x(self):
+        self.send_command_safe('zoom_4x', 'zoom_4x')
+    
+    def mode_L(self):
+        self.send_command_safe('mode_L', 'mode_L')
+    
+    def mode_M(self):
+        self.send_command_safe('mode_M', 'mode_M')
+    
+    def mode_H(self):
+        self.send_command_safe('mode_H', 'mode_H')
+    
+    def flip_none(self):
+        self.send_command_safe('flip_none', 'flip_none')
+    
+    def flip_h(self):
+        self.send_command_safe('flip_h', 'flip_h')
+    
+    def flip_v(self):
+        self.send_command_safe('flip_v', 'flip_v')
+    
+    def flip_hv(self):
+        self.send_command_safe('flip_hv', 'flip_hv')
+    
+    def on_gamma_changed(self, value):
+        self.gamma_label.setText(str(value))
+        key = f'gamma_{value}'
+        if key in self.controller.gamma_values:
+            try:
+                self.controller.send_command(self.controller.gamma_values[key], lambda msg: print(msg))
+            except Exception as e:
+                print(f"Ошибка при отправке команды гаммы '{key}': {e}")
+    
+    def nuc_table_0(self):
+        self.send_command_safe('nuc_table_0', 'nuc_table_0')
+    
+    def nuc_table_1(self):
+        self.send_command_safe('nuc_table_1', 'nuc_table_1')
+    
+    def nuc_table_2(self):
+        self.send_command_safe('nuc_table_2', 'nuc_table_2')
+
+
+class ManualControlsTab(ControlTab):
+    """Вкладка ручного управления"""
+    
+    def __init__(self, controller, parent=None):
+        super().__init__(controller, parent)
+        self.init_ui()
+    
+    def init_ui(self):
         # Переключатели
-        switches_frame = ttk.LabelFrame(frame, text="Переключатели", padding=(10, 5))
-        switches_frame.pack(fill=tk.X, padx=10, pady=5)
+        switches_group = QGroupBox("Переключатели")
+        switches_layout = QGridLayout()
         
-        ttk.Button(switches_frame, text="Открыть перекрестие ON", command=self.open_cross_on).pack(side=tk.LEFT, padx=5)
-        ttk.Button(switches_frame, text="Открыть перекрестие OFF", command=self.open_cross_off).pack(side=tk.LEFT, padx=5)
+        switches_layout.addWidget(self.create_button_with_style("Открыть перекрестие ON", self.open_cross_on), 0, 0)
+        switches_layout.addWidget(self.create_button_with_style("Открыть перекрестие OFF", self.open_cross_off), 0, 1)
+        switches_layout.addWidget(self.create_button_with_style("Time Domain Filter ON", self.time_domain_filter_on), 1, 0)
+        switches_layout.addWidget(self.create_button_with_style("Time Domain Filter OFF", self.time_domain_filter_off), 1, 1)
+        switches_layout.addWidget(self.create_button_with_style("Image Enhance ON", self.image_enhance_on), 2, 0)
+        switches_layout.addWidget(self.create_button_with_style("Image Enhance OFF", self.image_enhance_off), 2, 1)
+        switches_layout.addWidget(self.create_button_with_style("White Hot ON", self.white_hot_on), 3, 0)
+        switches_layout.addWidget(self.create_button_with_style("White Hot OFF", self.white_hot_off), 3, 1)
+        switches_layout.addWidget(self.create_button_with_style("AGC ON", self.agc_on), 4, 0)
+        switches_layout.addWidget(self.create_button_with_style("AGC OFF", self.agc_off), 4, 1)
         
-        ttk.Button(switches_frame, text="Time Domain Filter ON", command=self.time_domain_filter_on).pack(side=tk.LEFT, padx=5)
-        ttk.Button(switches_frame, text="Time Domain Filter OFF", command=self.time_domain_filter_off).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(switches_frame, text="Image Enhance ON", command=self.image_enhance_on).pack(side=tk.LEFT, padx=5)
-        ttk.Button(switches_frame, text="Image Enhance OFF", command=self.image_enhance_off).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(switches_frame, text="White Hot ON", command=self.white_hot_on).pack(side=tk.LEFT, padx=5)
-        ttk.Button(switches_frame, text="White Hot OFF", command=self.white_hot_off).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(switches_frame, text="AGC ON", command=self.agc_on).pack(side=tk.LEFT, padx=5)
-        ttk.Button(switches_frame, text="AGC OFF", command=self.agc_off).pack(side=tk.LEFT, padx=5)
+        switches_group.setLayout(switches_layout)
+        self.layout.addWidget(switches_group)
         
         # Дополнительные функции
-        extra_frame = ttk.LabelFrame(frame, text="Дополнительные функции", padding=(10, 5))
-        extra_frame.pack(fill=tk.X, padx=10, pady=5)
+        extra_group = QGroupBox("Дополнительные функции")
+        extra_layout = QGridLayout()
         
-        ttk.Button(extra_frame, text="Автофокус", command=self.auto_focus).pack(side=tk.LEFT, padx=5)
-        ttk.Button(extra_frame, text="Запрос статуса", command=self.status_inquiry).pack(side=tk.LEFT, padx=5)
-        ttk.Button(extra_frame, text="Two Point Calc", command=self.two_point_calc).pack(side=tk.LEFT, padx=5)
-        ttk.Button(extra_frame, text="Two Point & Auto BPR Save", command=self.two_point_auto_bpr_save).pack(side=tk.LEFT, padx=5)
-        ttk.Button(extra_frame, text="Manual BPR Save", command=self.manual_bpr_save).pack(side=tk.LEFT, padx=5)
-        ttk.Button(extra_frame, text="Auto BPR", command=self.auto_bpr).pack(side=tk.LEFT, padx=5)
+        extra_layout.addWidget(self.create_button_with_style("Автофокус", self.auto_focus), 0, 0)
+        extra_layout.addWidget(self.create_button_with_style("Запрос статуса", self.status_inquiry), 0, 1)
+        extra_layout.addWidget(self.create_button_with_style("Two Point Calc", self.two_point_calc), 1, 0)
+        extra_layout.addWidget(self.create_button_with_style("Two Point & Auto BPR Save", self.two_point_auto_bpr_save), 1, 1)
+        extra_layout.addWidget(self.create_button_with_style("Manual BPR Save", self.manual_bpr_save), 2, 0)
+        extra_layout.addWidget(self.create_button_with_style("Auto BPR", self.auto_bpr), 2, 1)
+        
+        extra_group.setLayout(extra_layout)
+        self.layout.addWidget(extra_group)
         
         # Поле для отправки произвольных команд
-        custom_frame = ttk.LabelFrame(frame, text="Произвольная команда", padding=(10, 5))
-        custom_frame.pack(fill=tk.X, padx=10, pady=5)
+        custom_group = QGroupBox("Произвольная команда")
+        custom_layout = QVBoxLayout()
+        custom_layout.addWidget(QLabel("Введите команду в формате hex (через пробел):"))
+        self.custom_cmd_input = QTextEdit()
+        self.custom_cmd_input.setMaximumHeight(60)
+        custom_layout.addWidget(self.custom_cmd_input)
+        self.send_custom_btn = self.create_button_with_style("Отправить команду", self.send_custom_command)
+        custom_layout.addWidget(self.send_custom_btn)
+        custom_group.setLayout(custom_layout)
+        self.layout.addWidget(custom_group)
         
-        ttk.Label(custom_frame, text="Введите команду в формате hex (через пробел):").pack(anchor=tk.W)
+        self.layout.addStretch()
+    
+    def open_cross_on(self):
+        self.send_command_safe('open_cross_on', 'open_cross_on')
+    
+    def open_cross_off(self):
+        self.send_command_safe('open_cross_off', 'open_cross_off')
+    
+    def time_domain_filter_on(self):
+        self.send_command_safe('time_domain_filter_on', 'time_domain_filter_on')
+    
+    def time_domain_filter_off(self):
+        self.send_command_safe('time_domain_filter_off', 'time_domain_filter_off')
+    
+    def image_enhance_on(self):
+        self.send_command_safe('image_enhance_on', 'image_enhance_on')
+    
+    def image_enhance_off(self):
+        self.send_command_safe('image_enhance_off', 'image_enhance_off')
+    
+    def white_hot_on(self):
+        self.send_command_safe('white_hot_on', 'white_hot_on')
+    
+    def white_hot_off(self):
+        self.send_command_safe('white_hot_off', 'white_hot_off')
+    
+    def agc_on(self):
+        self.send_command_safe('agc_on', 'agc_on')
+    
+    def agc_off(self):
+        self.send_command_safe('agc_off', 'agc_off')
+    
+    def auto_focus(self):
+        self.send_command_safe('auto_focus', 'auto_focus')
+    
+    def status_inquiry(self):
+        self.send_command_safe('status_inquiry', 'status_inquiry')
+    
+    def two_point_calc(self):
+        self.send_command_safe('two_point_calc', 'two_point_calc')
+    
+    def two_point_auto_bpr_save(self):
+        self.send_command_safe('two_point_auto_bpr_save', 'two_point_auto_bpr_save')
+    
+    def manual_bpr_save(self):
+        self.send_command_safe('manual_bpr_save', 'manual_bpr_save')
+    
+    def auto_bpr(self):
+        self.send_command_safe('auto_bpr', 'auto_bpr')
+    
+    def send_custom_command(self):
+        cmd_text = self.custom_cmd_input.toPlainText().strip()
+        if cmd_text:
+            try:
+                hex_values = [int(x, 16) for x in cmd_text.split()]
+                self.controller.send_command(hex_values, lambda msg: print(msg))
+            except ValueError:
+                print("Неверный формат команды")
+
+
+class MainWindow(QMainWindow):
+    """Главное окно приложения"""
+    
+    def __init__(self):
+        super().__init__()
+        self.controller = ThermalCameraController()
+        self.init_ui()
+        self.apply_theme()
+    
+    def init_ui(self):
+        self.setWindowTitle("MINIR Термокамера - Контроллер")
+        self.setGeometry(200, 200, 500, 600)
         
-        self.custom_cmd_var = tk.StringVar()
-        custom_entry = ttk.Entry(custom_frame, textvariable=self.custom_cmd_var)
-        custom_entry.pack(fill=tk.X, pady=5)
+        # Центральный виджет
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
         
-        ttk.Button(custom_frame, text="Отправить команду", command=self.send_custom_command).pack()
+        # Панель подключения
+        self.connection_panel = ConnectionPanel()
+        main_layout.addWidget(self.connection_panel)
         
-    def refresh_ports(self):
-        """Обновление списка доступных COM-портов"""
-        ports = []
-        for port in serial.tools.list_ports.comports():
-            ports.append(port.device)
+        # Установка соединений
+        self.connection_panel.connect_btn.clicked.connect(self.toggle_connection)
         
-        if not ports:
-            ports = ["COM1", "COM2", "COM3", "COM4"]
+        # Вкладки управления
+        self.tabs = QTabWidget()
+        self.tabs.addTab(BasicControlsTab(self.controller), "Базовое управление")
+        self.tabs.addTab(ImageControlsTab(self.controller), "Управление изображением")
+        self.tabs.addTab(AdvancedControlsTab(self.controller), "Расширенное управление")
+        self.tabs.addTab(ManualControlsTab(self.controller), "Ручное управление")
         
-        self.port_combo['values'] = ports
-        if ports:
-            self.port_combo.current(0)
+        main_layout.addWidget(self.tabs)
+        
+        # Статус бар
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Готов")
+    
+    def apply_theme(self):
+        """Применение темной темы VS Code"""
+        # Установка стилей для всего приложения
+        self.setStyleSheet(f"""
+            QMainWindow {{
+                background-color: {VSCodeDarkTheme.BACKGROUND};
+            }}
+            QTabWidget::pane {{
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                background-color: {VSCodeDarkTheme.PANEL_BACKGROUND};
+            }}
+            QTabBar::tab {{
+                background-color: {VSCodeDarkTheme.PANEL_BACKGROUND};
+                color: {VSCodeDarkTheme.TEXT_SECONDARY};
+                padding: 8px;
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                border-bottom: none;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {VSCodeDarkTheme.BACKGROUND};
+                color: {VSCodeDarkTheme.TEXT};
+                border-bottom: 2px solid {VSCodeDarkTheme.ACCENT};
+            }}
+            QGroupBox {{
+                font-weight: bold;
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                border-radius: 5px;
+                margin-top: 1ex;
+                padding-top: 10px;
+                color: {VSCodeDarkTheme.TEXT};
+                background-color: {VSCodeDarkTheme.PANEL_BACKGROUND};
+            }}
+            QGroupBox:title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }}
+            QLabel {{
+                color: {VSCodeDarkTheme.TEXT};
+            }}
+            QSlider::groove:horizontal {{
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                height: 6px;
+                background: {VSCodeDarkTheme.HIGHLIGHT};
+                margin: 2px 0;
+            }}
+            QSlider::handle:horizontal {{
+                background: {VSCodeDarkTheme.ACCENT};
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                width: 18px;
+                margin: -8px 0;
+                border-radius: 3px;
+            }}
+            QComboBox {{
+                background-color: {VSCodeDarkTheme.HIGHLIGHT};
+                color: {VSCodeDarkTheme.TEXT};
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                padding: 3px 5px;
+                border-radius: 3px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {VSCodeDarkTheme.HIGHLIGHT};
+                color: {VSCodeDarkTheme.TEXT};
+                selection-background-color: {VSCodeDarkTheme.ACCENT};
+            }}
+            QTextEdit {{
+                background-color: {VSCodeDarkTheme.HIGHLIGHT};
+                color: {VSCodeDarkTheme.TEXT};
+                border: 1px solid {VSCodeDarkTheme.BORDER};
+                border-radius: 3px;
+            }}
+            QStatusBar {{
+                background-color: {VSCodeDarkTheme.PANEL_BACKGROUND};
+                color: {VSCodeDarkTheme.TEXT};
+            }}
+        """)
+        
+        # Установка шрифта
+        font = QFont("Consolas", 9)
+        self.setFont(font)
     
     def toggle_connection(self):
         """Переключение состояния подключения"""
         if self.controller.is_connected:
             self.controller.disconnect()
-            self.connect_btn.config(text="Подключить")
-            self.log_message("Отключено от порта")
+            self.connection_panel.connect_btn.setText("Подключить")
+            self.status_bar.showMessage("Отключено")
         else:
-            port = self.port_var.get()
-            baudrate = int(self.baudrate_var.get())  # Получаем выбранную скорость
+            port = self.connection_panel.port_combo.currentText()
+            baudrate = int(self.connection_panel.baudrate_combo.currentText())
             if self.controller.connect(port, baudrate):
-                self.connect_btn.config(text="Отключить")
-                self.log_message(f"Подключено к {port} на скорости {baudrate} бод")
+                self.connection_panel.connect_btn.setText("Отключить")
+                self.status_bar.showMessage(f"Подключено к {port} на скорости {baudrate} бод")
             else:
-                messagebox.showerror("Ошибка", f"Не удалось подключиться к {port}")
+                self.status_bar.showMessage(f"Ошибка подключения к {port}")
     
-    def log_message(self, message):
-        """Добавление сообщения в лог"""
-        self.log_text.insert(tk.END, f"{time.strftime('%H:%M:%S')} - {message}\n")
-        self.log_text.see(tk.END)
-    
-    def send_command_by_key(self, key):
-        """Отправка команды по ключу"""
-        if not self.controller.is_connected:
-            messagebox.showwarning("Предупреждение", "Не подключено к камере")
-            return
-        
-        # Проверяем наличие команды в разных словарях
-        command = None
-        if key in self.controller.commands:
-            command = self.controller.commands[key]
-        elif key in self.controller.color_palettes:
-            command = self.controller.color_palettes[key]
-        elif key in self.controller.zoom_levels:
-            command = self.controller.zoom_levels[key]
-        elif key in self.controller.image_modes:
-            command = self.controller.image_modes[key]
-        elif key in self.controller.flip_modes:
-            command = self.controller.flip_modes[key]
-        elif key in self.controller.nuc_tables:
-            command = self.controller.nuc_tables[key]
-        elif key in self.controller.gamma_values:
-            command = self.controller.gamma_values[key]
-        
-        if command:
-            # Добавляем callback для логирования команды
-            success = self.controller.send_command(command, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Отправлена команда: {key}")
-            else:
-                self.log_message(f"Ошибка отправки команды: {key}")
-        else:
-            messagebox.showerror("Ошибка", f"Команда не найдена: {key}")
-    
-    # Базовые команды
-    def open_shutter(self):
-        self.send_command_by_key('shutter_open')
-    
-    def close_shutter(self):
-        self.send_command_by_key('shutter_close')
-    
-    def manual_calibration(self):
-        self.send_command_by_key('manual_calibration')
-    
-    def background_calibration(self):
-        self.send_command_by_key('background_calibration')
-    
-    def auto_calibration_on(self):
-        self.send_command_by_key('auto_calibration_on')
-    
-    def auto_calibration_off(self):
-        self.send_command_by_key('auto_calibration_off')
-    
-    def reset(self):
-        self.send_command_by_key('reset')
-    
-    def save_parameters(self):
-        self.send_command_by_key('save_parameter')
-    
-    def save_calib_data(self):
-        self.send_command_by_key('save_calib_data')
-    
-    # Команды управления изображением
-    def set_brightness(self, value):
-        if not self.controller.is_connected:
-            return
-        
-        try:
-            command = self.controller.create_brightness_command(value)
-            success = self.controller.send_command(command, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Установлена яркость: {value}")
-        except ValueError as e:
-            messagebox.showerror("Ошибка", str(e))
-    
-    def set_gain(self, value):
-        if not self.controller.is_connected:
-            return
-        
-        try:
-            command = self.controller.create_gain_command(value)
-            success = self.controller.send_command(command, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Установлено усиление: {value}")
-        except ValueError as e:
-            messagebox.showerror("Ошибка", str(e))
-    
-    def set_dde(self, value):
-        if not self.controller.is_connected:
-            return
-        
-        try:
-            command = self.controller.create_dde_command(value)
-            success = self.controller.send_command(command, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Установлено DDE: {value}")
-        except ValueError as e:
-            messagebox.showerror("Ошибка", str(e))
-    
-    def set_filter(self, value):
-        if not self.controller.is_connected:
-            return
-        
-        try:
-            command = self.controller.create_filter_command(value)
-            success = self.controller.send_command(command, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Установлен фильтр: {value}")
-        except ValueError as e:
-            messagebox.showerror("Ошибка", str(e))
-    
-    def set_cross_x(self, value):
-        if not self.controller.is_connected:
-            return
-        
-        try:
-            command = self.controller.create_cross_x_command(value)
-            success = self.controller.send_command(command, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Установлена координата X перекрестия: {value}")
-        except ValueError as e:
-            messagebox.showerror("Ошибка", str(e))
-    
-    def set_cross_y(self, value):
-        if not self.controller.is_connected:
-            return
-        
-        try:
-            command = self.controller.create_cross_y_command(value)
-            success = self.controller.send_command(command, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Установлена координата Y перекрестия: {value}")
-        except ValueError as e:
-            messagebox.showerror("Ошибка", str(e))
-    
-    # Расширенные команды
-    def zoom_1x(self):
-        self.send_command_by_key('zoom_1x')
-    
-    def zoom_2x(self):
-        self.send_command_by_key('zoom_2x')
-    
-    def zoom_4x(self):
-        self.send_command_by_key('zoom_4x')
-    
-    def mode_L(self):
-        self.send_command_by_key('mode_L')
-    
-    def mode_M(self):
-        self.send_command_by_key('mode_M')
-    
-    def mode_H(self):
-        self.send_command_by_key('mode_H')
-    
-    def flip_none(self):
-        self.send_command_by_key('flip_none')
-    
-    def flip_h(self):
-        self.send_command_by_key('flip_h')
-    
-    def flip_v(self):
-        self.send_command_by_key('flip_v')
-    
-    def flip_hv(self):
-        self.send_command_by_key('flip_hv')
-    
-    def set_gamma(self, value):
-        key = f'gamma_{value}'
-        self.send_command_by_key(key)
-    
-    def nuc_table_0(self):
-        self.send_command_by_key('nuc_table_0')
-    
-    def nuc_table_1(self):
-        self.send_command_by_key('nuc_table_1')
-    
-    def nuc_table_2(self):
-        self.send_command_by_key('nuc_table_2')
-    
-    # Ручные команды
-    def open_cross_on(self):
-        self.send_command_by_key('open_cross_on')
-    
-    def open_cross_off(self):
-        self.send_command_by_key('open_cross_off')
-    
-    def time_domain_filter_on(self):
-        self.send_command_by_key('time_domain_filter_on')
-    
-    def time_domain_filter_off(self):
-        self.send_command_by_key('time_domain_filter_off')
-    
-    def image_enhance_on(self):
-        self.send_command_by_key('image_enhance_on')
-    
-    def image_enhance_off(self):
-        self.send_command_by_key('image_enhance_off')
-    
-    def white_hot_on(self):
-        self.send_command_by_key('white_hot_on')
-    
-    def white_hot_off(self):
-        self.send_command_by_key('white_hot_off')
-    
-    def agc_on(self):
-        self.send_command_by_key('agc_on')
-    
-    def agc_off(self):
-        self.send_command_by_key('agc_off')
-    
-    def auto_focus(self):
-        self.send_command_by_key('auto_focus')
-    
-    def status_inquiry(self):
-        self.send_command_by_key('status_inquiry')
-    
-    def two_point_calc(self):
-        self.send_command_by_key('two_point_calc')
-    
-    def two_point_auto_bpr_save(self):
-        self.send_command_by_key('two_point_auto_bpr_save')
-    
-    def manual_bpr_save(self):
-        self.send_command_by_key('manual_bpr_save')
-    
-    def auto_bpr(self):
-        self.send_command_by_key('auto_bpr')
-    
-    def send_custom_command(self):
-        if not self.controller.is_connected:
-            messagebox.showwarning("Предупреждение", "Не подключено к камере")
-            return
-        
-        try:
-            cmd_str = self.custom_cmd_var.get().strip()
-            if not cmd_str:
-                messagebox.showwarning("Предупреждение", "Введите команду")
-                return
-            
-            # Преобразуем строку в hex значения
-            hex_values = [int(x, 16) for x in cmd_str.split()]
-            
-            # Логируем команду перед отправкой
-            self.log_message(f"Отправка пользовательской команды: {cmd_str}")
-            
-            success = self.controller.send_command(hex_values, log_callback=self.log_message)
-            if success:
-                self.log_message(f"Отправлена произвольная команда: {cmd_str}")
-            else:
-                self.log_message(f"Ошибка отправки команды: {cmd_str}")
-        except ValueError:
-            messagebox.showerror("Ошибка", "Неверный формат команды. Используйте шестнадцатеричные значения через пробел (например: F0 02 26 41 67 FF)")
 
 
 def main():
-    root = tk.Tk()
-    app = ThermalCameraGUI(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

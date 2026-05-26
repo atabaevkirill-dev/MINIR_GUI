@@ -16,7 +16,7 @@ def main():
     print(f"Операционная система: {platform.system()} {platform.release()}")
     
     # Определяем имя файла основного приложения
-    main_app_file = "main_pyqt_claude.py"
+    main_app_file = "main.py"
     
     # Проверяем существование файла
     if not os.path.exists(main_app_file):

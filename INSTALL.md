@@ -60,7 +60,7 @@
    ```
 2. Запустите приложение:
    ```
-   python3 main_pyqt_claude.py
+   python3 main.py
    ```
 
 ## Linux (CentOS/RHEL/Fedora)
@@ -90,7 +90,7 @@
    ```
 2. Запустите приложение:
    ```
-   python3 main_pyqt_claude.py
+   python3 main.py
    ```
 
 ## Установка через pip (для всех платформ)

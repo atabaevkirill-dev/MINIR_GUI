@@ -15,14 +15,14 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # Проверяем наличие основного файла приложения
-if [ ! -f "main_pyqt_claude.py" ]; then
+if [ ! -f "main.py" ]; then
     echo "Ошибка: файл main_pyqt_claude.py не найден!"
     exit 1
 fi
 
 # Запускаем приложение
 echo "Запуск приложения..."
-python3 main_pyqt_claude.py
+python3 main.py
 
 # Проверяем результат
 if [ $? -eq 0 ]; then
