@@ -354,11 +354,42 @@ class ControlTab(QWidget):
             for table in (c.commands, c.color_palettes, c.zoom_levels,
                           c.image_modes, c.flip_modes, c.nuc_tables, c.gamma_values):
                 if command_key in table:
-                    c.send_command(table[command_key], lambda msg: print(msg))
+                    if c.send_command(table[command_key], lambda msg: print(msg)):
+                        # Получаем главное окно для обновления строки состояния
+                        parent = self.parent()
+                        while parent and not isinstance(parent, MainWindow):
+                            parent = parent.parent()
+                        
+                        if parent:
+                            parent.update_status(f"Команда '{display_name}' успешно отправлена")
+                    else:
+                        parent = self.parent()
+                        while parent and not isinstance(parent, MainWindow):
+                            parent = parent.parent()
+                        
+                        if parent:
+                            parent.update_status(f"Ошибка отправки команды '{display_name}'")
                     return
             print(f"Команда '{command_key}' не найдена")
+            
+            # Также обновляем статус, если команда не найдена
+            parent = self.parent()
+            while parent and not isinstance(parent, MainWindow):
+                parent = parent.parent()
+            
+            if parent:
+                parent.update_status(f"Команда '{command_key}' не найдена")
+                
         except Exception as e:
             print(f"Ошибка при отправке команды '{display_name}': {e}")
+            
+            # Обновляем статус при ошибке
+            parent = self.parent()
+            while parent and not isinstance(parent, MainWindow):
+                parent = parent.parent()
+            
+            if parent:
+                parent.update_status(f"Ошибка при отправке команды '{display_name}': {e}")
 
 
 class BasicControlsTab(ControlTab):
@@ -520,54 +551,174 @@ class ImageControlsTab(ControlTab):
         if self.controller.is_connected:
             try:
                 command = self.controller.create_brightness_command(value)
-                self.controller.send_command(command, lambda msg: print(msg))
+                if self.controller.send_command(command, lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Яркость установлена на {value}")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status("Ошибка установки яркости")
             except ValueError as e:
                 print(f"Ошибка: {e}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Ошибка: {e}")
     
     def on_gain_changed(self, value):
         self.gain_label.setText(str(value))
         if self.controller.is_connected:
             try:
                 command = self.controller.create_gain_command(value)
-                self.controller.send_command(command, lambda msg: print(msg))
+                if self.controller.send_command(command, lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Усиление установлено на {value}")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status("Ошибка установки усиления")
             except ValueError as e:
                 print(f"Ошибка: {e}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Ошибка: {e}")
     
     def on_dde_changed(self, value):
         self.dde_label.setText(str(value))
         if self.controller.is_connected:
             try:
                 command = self.controller.create_dde_command(value)
-                self.controller.send_command(command, lambda msg: print(msg))
+                if self.controller.send_command(command, lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"DDE установлено на {value}")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status("Ошибка установки DDE")
             except ValueError as e:
                 print(f"Ошибка: {e}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Ошибка: {e}")
     
     def on_filter_changed(self, value):
         self.filter_label.setText(str(value))
         if self.controller.is_connected:
             try:
                 command = self.controller.create_filter_command(value)
-                self.controller.send_command(command, lambda msg: print(msg))
+                if self.controller.send_command(command, lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Фильтр установлен на {value}")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status("Ошибка установки фильтра")
             except ValueError as e:
                 print(f"Ошибка: {e}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Ошибка: {e}")
     
     def on_cross_x_changed(self, value):
         self.cross_x_label.setText(str(value))
         if self.controller.is_connected:
             try:
                 command = self.controller.create_cross_x_command(value)
-                self.controller.send_command(command, lambda msg: print(msg))
+                if self.controller.send_command(command, lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Координата X перекрестия установлена на {value}")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status("Ошибка установки координаты X перекрестия")
             except ValueError as e:
                 print(f"Ошибка: {e}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Ошибка: {e}")
     
     def on_cross_y_changed(self, value):
         self.cross_y_label.setText(str(value))
         if self.controller.is_connected:
             try:
                 command = self.controller.create_cross_y_command(value)
-                self.controller.send_command(command, lambda msg: print(msg))
+                if self.controller.send_command(command, lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Координата Y перекрестия установлена на {value}")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status("Ошибка установки координаты Y перекрестия")
             except ValueError as e:
                 print(f"Ошибка: {e}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Ошибка: {e}")
 
 
 class AdvancedControlsTab(ControlTab):
@@ -656,44 +807,128 @@ class AdvancedControlsTab(ControlTab):
             # Проверяем, что palette_key - строка и имеет правильный формат
             if not isinstance(palette_key, str):
                 print(f"Недопустимый тип ключа палитры: {type(palette_key)}, значение: {palette_key}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Недопустимый тип ключа палитры: {type(palette_key)}")
                 return
             
             if palette_key in self.controller.color_palettes:
                 command = self.controller.color_palettes[palette_key]
-                self.controller.send_command(command, lambda msg: print(msg))
+                if self.controller.send_command(command, lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Цветовая палитра '{palette_key}' установлена")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Ошибка установки цветовой палитры '{palette_key}'")
             else:
                 print(f"Цветовая палитра '{palette_key}' не найдена")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Цветовая палитра '{palette_key}' не найдена")
         except Exception as e:
             print(f"Ошибка при отправке команды цветовой палитры '{palette_key}': {e}")
+            
+            parent = self.parent()
+            while parent and not isinstance(parent, MainWindow):
+                parent = parent.parent()
+            
+            if parent:
+                parent.update_status(f"Ошибка при отправке команды цветовой палитры '{palette_key}': {e}")
     
     def zoom_1x(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка электронного зума: 1x")
         self.send_command_safe('zoom_1x', 'zoom_1x')
     
     def zoom_2x(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка электронного зума: 2x")
         self.send_command_safe('zoom_2x', 'zoom_2x')
     
     def zoom_4x(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка электронного зума: 4x")
         self.send_command_safe('zoom_4x', 'zoom_4x')
     
     def mode_L(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка режима изображения: L")
         self.send_command_safe('mode_L', 'mode_L')
     
     def mode_M(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка режима изображения: M")
         self.send_command_safe('mode_M', 'mode_M')
     
     def mode_H(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка режима изображения: H")
         self.send_command_safe('mode_H', 'mode_H')
     
     def flip_none(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка инверсии изображения: Нет")
         self.send_command_safe('flip_none', 'flip_none')
     
     def flip_h(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка инверсии изображения: Горизонтально")
         self.send_command_safe('flip_h', 'flip_h')
     
     def flip_v(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка инверсии изображения: Вертикально")
         self.send_command_safe('flip_v', 'flip_v')
     
     def flip_hv(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка инверсии изображения: Оба")
         self.send_command_safe('flip_hv', 'flip_hv')
     
     def on_gamma_changed(self, value):
@@ -701,17 +936,52 @@ class AdvancedControlsTab(ControlTab):
         key = f'gamma_{value}'
         if key in self.controller.gamma_values:
             try:
-                self.controller.send_command(self.controller.gamma_values[key], lambda msg: print(msg))
+                if self.controller.send_command(self.controller.gamma_values[key], lambda msg: print(msg)):
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status(f"Гамма-коррекция установлена на {value}")
+                else:
+                    parent = self.parent()
+                    while parent and not isinstance(parent, MainWindow):
+                        parent = parent.parent()
+                    
+                    if parent:
+                        parent.update_status("Ошибка установки гамма-коррекции")
             except Exception as e:
                 print(f"Ошибка при отправке команды гаммы '{key}': {e}")
+                
+                parent = self.parent()
+                while parent and not isinstance(parent, MainWindow):
+                    parent = parent.parent()
+                
+                if parent:
+                    parent.update_status(f"Ошибка при отправке команды гаммы '{key}': {e}")
     
     def nuc_table_0(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка NUC таблицы: 0")
         self.send_command_safe('nuc_table_0', 'nuc_table_0')
     
     def nuc_table_1(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка NUC таблицы: 1")
         self.send_command_safe('nuc_table_1', 'nuc_table_1')
     
     def nuc_table_2(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка NUC таблицы: 2")
         self.send_command_safe('nuc_table_2', 'nuc_table_2')
 
 
@@ -770,61 +1040,152 @@ class ManualControlsTab(ControlTab):
         self.layout.addStretch()
     
     def open_cross_on(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка перекрестия: ON")
         self.send_command_safe('open_cross_on', 'open_cross_on')
     
     def open_cross_off(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка перекрестия: OFF")
         self.send_command_safe('open_cross_off', 'open_cross_off')
     
     def time_domain_filter_on(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка Time Domain Filter: ON")
         self.send_command_safe('time_domain_filter_on', 'time_domain_filter_on')
     
     def time_domain_filter_off(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка Time Domain Filter: OFF")
         self.send_command_safe('time_domain_filter_off', 'time_domain_filter_off')
     
     def image_enhance_on(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка Image Enhance: ON")
         self.send_command_safe('image_enhance_on', 'image_enhance_on')
     
     def image_enhance_off(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка Image Enhance: OFF")
         self.send_command_safe('image_enhance_off', 'image_enhance_off')
     
     def white_hot_on(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка White Hot: ON")
         self.send_command_safe('white_hot_on', 'white_hot_on')
     
     def white_hot_off(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка White Hot: OFF")
         self.send_command_safe('white_hot_off', 'white_hot_off')
     
     def agc_on(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка AGC: ON")
         self.send_command_safe('agc_on', 'agc_on')
     
     def agc_off(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Установка AGC: OFF")
         self.send_command_safe('agc_off', 'agc_off')
     
     def auto_focus(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Отправка команды: Автофокус")
         self.send_command_safe('auto_focus', 'auto_focus')
     
     def status_inquiry(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Отправка команды: Запрос статуса")
         self.send_command_safe('status_inquiry', 'status_inquiry')
     
     def two_point_calc(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Отправка команды: Two Point Calc")
         self.send_command_safe('two_point_calc', 'two_point_calc')
     
     def two_point_auto_bpr_save(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Отправка команды: Two Point & Auto BPR Save")
         self.send_command_safe('two_point_auto_bpr_save', 'two_point_auto_bpr_save')
     
     def manual_bpr_save(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Отправка команды: Manual BPR Save")
         self.send_command_safe('manual_bpr_save', 'manual_bpr_save')
     
     def auto_bpr(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        if parent:
+            parent.update_status("Отправка команды: Auto BPR")
         self.send_command_safe('auto_bpr', 'auto_bpr')
     
     def send_custom_command(self):
+        parent = self.parent()
+        while parent and not isinstance(parent, MainWindow):
+            parent = parent.parent()
+        
         cmd_text = self.custom_cmd_input.toPlainText().strip()
         if cmd_text:
             try:
                 hex_values = [int(x, 16) for x in cmd_text.split()]
-                self.controller.send_command(hex_values, lambda msg: print(msg))
+                if self.controller.send_command(hex_values, lambda msg: print(msg)):
+                    if parent:
+                        parent.update_status(f"Произвольная команда отправлена: {cmd_text}")
+                else:
+                    if parent:
+                        parent.update_status(f"Ошибка отправки команды: {cmd_text}")
             except ValueError:
                 print("Неверный формат команды")
+                if parent:
+                    parent.update_status("Неверный формат команды")
 
 
 class MainWindow(QMainWindow):
@@ -947,6 +1308,10 @@ class MainWindow(QMainWindow):
         # Установка шрифта
         font = QFont("Consolas", 9)
         self.setFont(font)
+    
+    def update_status(self, message, timeout=3000):
+        """Обновление строки состояния с возможностью очистки через определенное время"""
+        self.status_bar.showMessage(message, timeout)
     
     def toggle_connection(self):
         """Переключение состояния подключения"""

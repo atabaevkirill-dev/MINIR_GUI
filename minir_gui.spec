@@ -1,31 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import sys
-import os
-from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files
 
-# Получаем путь к текущему каталогу проекта
-PROJECT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+hiddenimports = []
+datas = []
+
+# Собираем все подмодули serial
+hiddenimports += collect_submodules('serial')
+
+# Собираем все подмодули PyQt6
+hiddenimports += collect_submodules('PyQt6')
 
 block_cipher = None
 
 a = Analysis(
     ['main.py'],
-    pathex=[str(PROJECT_DIR)],
+    pathex=[],
     binaries=[],
-    datas=[
-        # Если есть какие-то данные или ресурсы, которые нужно включить
-        # ('path/to/resource', 'resource'),
-    ],
-    hiddenimports=[
-        # Список модулей, которые могут быть импортированы динамически
-        'serial',
-        'serial.tools',
-        'serial.tools.list_ports',
-        'PyQt6.QtCore',
-        'PyQt6.QtGui',
-        'PyQt6.QtWidgets',
-    ],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

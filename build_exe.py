@@ -17,28 +17,23 @@ def build_executable():
     """Собирает исполняемый файл с помощью PyInstaller"""
     print("Начинаю сборку исполняемого файла...")
     
-    # Путь к файлу спецификации
-    spec_path = Path("minir_gui.spec")
-    
-    if spec_path.exists():
-        # Используем файл спецификации
-        cmd = [sys.executable, "-m", "PyInstaller", str(spec_path)]
-    else:
-        # Создаем команду для прямой сборки
-        cmd = [
-            sys.executable, "-m", "PyInstaller",
-            "--onefile",           # Создать один исполняемый файл
-            "--windowed",          # Не показывать консольное окно
-            "--name=MINIR_GUI",    # Имя исполняемого файла
-            "--add-data=README.md;.",  # Добавляем файлы документации
-            "--hidden-import=serial",
-            "--hidden-import=serial.tools",
-            "--hidden-import=serial.tools.list_ports",
-            "--hidden-import=PyQt6.QtCore",
-            "--hidden-import=PyQt6.QtGui",
-            "--hidden-import=PyQt6.QtWidgets",
-            "main.py"
-        ]
+    # Команда для сборки исполняемого файла
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        "--onefile",           # Создать один исполняемый файл
+        "--windowed",          # Не показывать консольное окно
+        "--name=MINIR_GUI",    # Имя исполняемого файла
+        "--add-data=README.md;.",  # Добавляем файлы документации
+        "--hidden-import=serial",
+        "--hidden-import=serial.tools",
+        "--hidden-import=serial.tools.list_ports",
+        "--hidden-import=PyQt6.QtCore",
+        "--hidden-import=PyQt6.QtGui",
+        "--hidden-import=PyQt6.QtWidgets",
+        "--collect-submodules=serial",
+        "--collect-submodules=PyQt6",
+        "main.py"
+    ]
     
     try:
         subprocess.check_call(cmd)
