@@ -1,4 +1,3 @@
 @echo off
-echo Запуск MINIR Термокамера - Контроллер (PyQt6 версия)...
-python main.py
+echo Запуск MINIR Термокамера - Контроллер
 pause
