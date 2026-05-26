@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minir-gui"
+version = "1.0.0"
+authors = [
+    {name = "Thermal Camera Team", email = "thermal-camera@example.com"},
+]
+description = "GUI application for controlling MINIR thermal camera via RS-232 protocol"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.6"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "pyserial>=3.5",
+    "PyQt6>=6.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[project.scripts]
+minir-gui = "main_pyqt_claude:main"
+
+[project.urls]
+Homepage = "https://github.com/your-repo/minir-gui"
+Repository = "https://github.com/your-repo/minir-gui"

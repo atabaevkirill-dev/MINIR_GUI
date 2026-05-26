@@ -12,10 +12,30 @@ from typing import List
 
 
 def get_serial_ports():
-    """Получение списка доступных COM-портов"""
+    """Получение списка доступных последовательных портов для всех платформ"""
     ports = []
+    system = platform.system()
+    
     for port in serial.tools.list_ports.comports():
         ports.append(port.device)
+    
+    # Если не найдены порты через pyserial, предоставляем общие имена для каждой ОС
+    if not ports:
+        if system == "Windows":
+            ports = ["COM1", "COM2", "COM3", "COM4"]
+        elif system == "Darwin":  # macOS
+            # Обычные префиксы для последовательных портов в macOS
+            import glob
+            ports = glob.glob('/dev/cu.*') + glob.glob('/dev/tty.*')
+        elif system == "Linux":
+            # Обычные префиксы для последовательных портов в Linux
+            import glob
+            ports = glob.glob('/dev/ttyS*') + glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*')
+        else:
+            # Для других Unix-систем
+            import glob
+            ports = glob.glob('/dev/ttyS*') + glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*')
+    
     return ports
 
 
@@ -57,8 +77,8 @@ class ThermalCameraController:
             'image_enhance_off': [0xF0, 0x03, 0x26, 0x0E, 0x00, 0x34, 0xFF],
             'white_hot_on': [0xF0, 0x03, 0x26, 0x05, 0x00, 0x2B, 0xFF],
             'white_hot_off': [0xF0, 0x03, 0x26, 0x05, 0x0F, 0x3A, 0xFF],
-            'agc_on': [0xF0, 0x03, 0x26, 0x13, 0x03, 0x3C, 0xFF],   # agc on(√)
-            'agc_off': [0xF0, 0x03, 0x26, 0x13, 0x01, 0x3A, 0xFF],  # agc on()
+            'agc_on': [0xF0, 0x03, 0x26, 0x13, 0x03, 0x3C, 0xFF],
+            'agc_off': [0xF0, 0x03, 0x26, 0x13, 0x01, 0x3A, 0xFF],
             'two_point_calc': [0xF0, 0x02, 0x26, 0x93, 0xB9, 0xFF],
             'two_point_auto_bpr_save': [0xF0, 0x02, 0x26, 0x94, 0xBA, 0xFF],
             'auto_focus': [0xF0, 0x02, 0x26, 0x34, 0x5A, 0xFF],
@@ -148,119 +168,140 @@ class ThermalCameraController:
         """Отправка команды в порт"""
         if not self.is_connected or not self.serial_port:
             return False
-
+            
         try:
+            # Преобразуем команду в байты
             command_bytes = bytearray(command)
-            cmd_hex = ' '.join([f'{byte:02X}' for byte in command])
+            
+            # Логируем команду перед отправкой
             if log_callback:
-                log_callback(f"TX: {cmd_hex}")
+                cmd_hex = ' '.join([f'{byte:02X}' for byte in command])
+            
             self.serial_port.write(command_bytes)
+            
+            # Даем время на выполнение команды
+            import time
+            time.sleep(0.1)
             return True
         except Exception as e:
             print(f"Ошибка отправки команды: {e}")
             return False
     
     def calculate_checksum(self, data: List[int]) -> int:
-        """Вычисление контрольной суммы от оригинальных (не экранированных) данных"""
-        return sum(data) & 0xFF
-
-    @staticmethod
-    def escape_byte(byte: int) -> List[int]:
-        """Экранирование одного байта согласно протоколу MINIR.
-
-        Специальные байты 0xF0, 0xFF, 0xF5 заменяются двухбайтовой
-        последовательностью. Заголовок пакета (F0, len, 26, cmd) и
-        конечный байт (FF) экранированию НЕ подлежат — они фиксированы
-        и никогда не принимают значения F0/FF/F5.
-        """
-        if byte == 0xF0:
-            return [0xF5, 0x00]
-        elif byte == 0xFF:
-            return [0xF5, 0x0F]
-        elif byte == 0xF5:
-            return [0xF5, 0x05]
-        return [byte]
-
-    def build_command(self, cmd_byte: int, value_bytes: List[int]) -> List[int]:
-        """Сборка команды с правильным экранированием согласно протоколу.
-
-        Алгоритм (подтверждён таблицами протокола):
-          1. Данные для контрольной суммы: [0x26, cmd_byte] + value_bytes (оригинальные).
-          2. Контрольная сумма считается от этих оригинальных данных.
-          3. value_bytes и checksum независимо экранируются при необходимости.
-          4. len-байт = len(value_bytes) + 1 (за 0x26) — всегда оригинальная длина,
-             не меняется при экранировании.
-
-        Формат пакета: F0 [len] 26 [cmd] [value_escaped...] [checksum_escaped...] FF
-        """
-        # Шаг 1: оригинальные данные для контрольной суммы
-        checksum_data = [0x26, cmd_byte] + value_bytes
-        checksum = self.calculate_checksum(checksum_data)
-
-        # Шаг 2: len = количество байт после len-поля до checksum (0x26 + cmd + values)
-        pkt_len = 1 + 1 + len(value_bytes)  # 0x26, cmd_byte, value_bytes
-
-        # Шаг 3: экранируем только value_bytes и checksum
-        escaped_values: List[int] = []
-        for b in value_bytes:
-            escaped_values.extend(self.escape_byte(b))
-        escaped_checksum = self.escape_byte(checksum)
-
-        return [0xF0, pkt_len, 0x26, cmd_byte] + escaped_values + escaped_checksum + [0xFF]
-
+        """Вычисление контрольной суммы"""
+        checksum = sum(data) & 0xFF
+        return checksum
+    
     def create_brightness_command(self, value: int) -> List[int]:
-        """Создание команды для установки яркости (0-255).
-        Формат: F0 03 26 0A [value_esc] [checksum_esc] FF
-        """
+        """Создание команды для установки яркости (0-255)"""
         if value < 0 or value > 255:
             raise ValueError("Яркость должна быть в диапазоне 0-255")
-        return self.build_command(0x0A, [value])
-
+        
+        # Формат команды: F0 03 26 0A [значение] [контрольная_сумма] FF
+        data = [0x26, 0x0A, value]
+        checksum = self.calculate_checksum(data)
+        command = [0xF0, 0x03] + data + [checksum, 0xFF]
+        
+        # Применяем экранирование если необходимо
+        return self.escape_command(command)
+    
     def create_gain_command(self, value: int) -> List[int]:
-        """Создание команды для установки усиления (0-255).
-        Формат: F0 03 26 09 [value_esc] [checksum_esc] FF
-        """
+        """Создание команды для установки усиления (0-255)"""
         if value < 0 or value > 255:
             raise ValueError("Усиление должно быть в диапазоне 0-255")
-        return self.build_command(0x09, [value])
-
+        
+        # Формат команды: F0 03 26 09 [значение] [контрольная_сумма] FF
+        data = [0x26, 0x09, value]
+        checksum = self.calculate_checksum(data)
+        command = [0xF0, 0x03] + data + [checksum, 0xFF]
+        
+        # Применяем экранирование если необходимо
+        return self.escape_command(command)
+    
     def create_dde_command(self, value: int) -> List[int]:
-        """Создание команды для установки DDE (0-255).
-        Формат: F0 03 26 77 [value_esc] [checksum_esc] FF
-        """
+        """Создание команды для установки DDE (0-255)"""
         if value < 0 or value > 255:
             raise ValueError("DDE должно быть в диапазоне 0-255")
-        return self.build_command(0x77, [value])
-
+        
+        # Формат команды: F0 03 26 77 [значение] [контрольная_сумма] FF
+        data = [0x26, 0x77, value]
+        checksum = self.calculate_checksum(data)
+        command = [0xF0, 0x03] + data + [checksum, 0xFF]
+        
+        # Применяем экранирование если необходимо
+        return self.escape_command(command)
+    
     def create_filter_command(self, value: int) -> List[int]:
-        """Создание команды для установки Spatial Filter (0-255).
-        Формат: F0 03 26 78 [value_esc] [checksum_esc] FF
-        """
+        """Создание команды для установки Spatial Filter (0-255)"""
         if value < 0 or value > 255:
             raise ValueError("Фильтр должен быть в диапазоне 0-255")
-        return self.build_command(0x78, [value])
-
+        
+        # Формат команды: F0 03 26 78 [значение] [контрольная_сумма] FF
+        data = [0x26, 0x78, value]
+        checksum = self.calculate_checksum(data)
+        command = [0xF0, 0x03] + data + [checksum, 0xFF]
+        
+        # Применяем экранирование если необходимо
+        return self.escape_command(command)
+    
     def create_cross_x_command(self, value: int) -> List[int]:
-        """Создание команды для установки координаты X перекрестия (0-701).
-        Формат: F0 04 26 0B [low_esc] [high_esc] [checksum_esc] FF
-        low_byte = value & 0xFF, high_byte = value >> 8
-        """
+        """Создание команды для установки координаты X перекрестия (0-701)"""
         if value < 0 or value > 701:
             raise ValueError("Координата X должна быть в диапазоне 0-701")
-        low_byte = value & 0xFF
+        
+        # Разделяем значение на старший и младший байты
         high_byte = (value >> 8) & 0xFF
-        return self.build_command(0x0B, [low_byte, high_byte])
-
+        low_byte = value & 0xFF
+        
+        # Формат команды: F0 04 26 0B [младший_байт] [старший_байт] [контрольная_сумма] FF
+        data = [0x26, 0x0B, low_byte, high_byte]
+        checksum = self.calculate_checksum(data)
+        command = [0xF0, 0x04] + data + [checksum, 0xFF]
+        
+        # Применяем экранирование если необходимо
+        return self.escape_command(command)
+    
     def create_cross_y_command(self, value: int) -> List[int]:
-        """Создание команды для установки координаты Y перекрестия (0-575).
-        Формат: F0 04 26 0C [low_esc] [high_esc] [checksum_esc] FF
-        low_byte = value & 0xFF, high_byte = value >> 8
-        """
+        """Создание команды для установки координаты Y перекрестия (0-575)"""
         if value < 0 or value > 575:
             raise ValueError("Координата Y должна быть в диапазоне 0-575")
-        low_byte = value & 0xFF
+        
+        # Разделяем значение на старший и младший байты
         high_byte = (value >> 8) & 0xFF
-        return self.build_command(0x0C, [low_byte, high_byte])
+        low_byte = value & 0xFF
+        
+        # Формат команды: F0 04 26 0C [младший_байт] [старший_байт] [контрольная_сумма] FF
+        data = [0x26, 0x0C, low_byte, high_byte]
+        checksum = self.calculate_checksum(data)
+        command = [0xF0, 0x04] + data + [checksum, 0xFF]
+        
+        # Применяем экранирование если необходимо
+        return self.escape_command(command)
+    
+    def escape_command(self, command: List[int]) -> List[int]:
+        """Применение экранирования к команде согласно протоколу"""
+        # Убираем стартовый и конечный байты для обработки данных
+        start_byte = command[0]
+        end_byte = command[-1]
+        data_part = command[1:-1]  # Все байты между стартом и концом
+        
+        escaped_data = []
+        for byte in data_part:
+            if byte == 0xF0:
+                escaped_data.extend([0xF5, 0x00])
+            elif byte == 0xFF:
+                escaped_data.extend([0xF5, 0x0F])
+            elif byte == 0xF5:
+                escaped_data.extend([0xF5, 0x05])
+            else:
+                escaped_data.append(byte)
+        
+        # Пересчитываем контрольную сумму для экранированных данных
+        new_checksum = self.calculate_checksum([start_byte, len(escaped_data)] + escaped_data)
+        
+        # Собираем команду обратно
+        result = [start_byte, len(escaped_data)] + escaped_data + [new_checksum, end_byte]
+        return result
 
 
 class ConnectionPanel(QWidget):
@@ -347,19 +388,6 @@ class ControlTab(QWidget):
         btn.clicked.connect(handler)
         return btn
 
-    def send_command_safe(self, command_key, display_name):
-        """Безопасная отправка команды — ищет по всем словарям контроллера"""
-        try:
-            c = self.controller
-            for table in (c.commands, c.color_palettes, c.zoom_levels,
-                          c.image_modes, c.flip_modes, c.nuc_tables, c.gamma_values):
-                if command_key in table:
-                    c.send_command(table[command_key], lambda msg: print(msg))
-                    return
-            print(f"Команда '{command_key}' не найдена")
-        except Exception as e:
-            print(f"Ошибка при отправке команды '{display_name}': {e}")
-
 
 class BasicControlsTab(ControlTab):
     """Вкладка базового управления"""
@@ -424,6 +452,17 @@ class BasicControlsTab(ControlTab):
     
     def save_calib_data(self):
         self.send_command_safe('save_calib_data', 'save_calib_data')
+    
+    def send_command_safe(self, command_key, display_name):
+        """Безопасная отправка команды с обработкой ошибок"""
+        try:
+            if command_key in self.controller.commands:
+                command = self.controller.commands[command_key]
+                self.controller.send_command(command, lambda msg: print(msg))
+            else:
+                print(f"Команда '{command_key}' не найдена")
+        except Exception as e:
+            print(f"Ошибка при отправке команды '{display_name}': {e}")
 
 
 class ImageControlsTab(ControlTab):
@@ -713,6 +752,17 @@ class AdvancedControlsTab(ControlTab):
     
     def nuc_table_2(self):
         self.send_command_safe('nuc_table_2', 'nuc_table_2')
+    
+    def send_command_safe(self, command_key, display_name):
+        """Безопасная отправка команды с обработкой ошибок"""
+        try:
+            if command_key in self.controller.commands:
+                command = self.controller.commands[command_key]
+                self.controller.send_command(command, lambda msg: print(msg))
+            else:
+                print(f"Команда '{command_key}' не найдена")
+        except Exception as e:
+            print(f"Ошибка при отправке команды '{display_name}': {e}")
 
 
 class ManualControlsTab(ControlTab):
@@ -825,6 +875,33 @@ class ManualControlsTab(ControlTab):
                 self.controller.send_command(hex_values, lambda msg: print(msg))
             except ValueError:
                 print("Неверный формат команды")
+    
+    def send_command_safe(self, command_key, display_name):
+        """Безопасная отправка команды с обработкой ошибок"""
+        try:
+            # Проверяем наличие команды во всех словарях команд
+            command = None
+            if command_key in self.controller.commands:
+                command = self.controller.commands[command_key]
+            elif command_key in self.controller.color_palettes:
+                command = self.controller.color_palettes[command_key]
+            elif command_key in self.controller.zoom_levels:
+                command = self.controller.zoom_levels[command_key]
+            elif command_key in self.controller.image_modes:
+                command = self.controller.image_modes[command_key]
+            elif command_key in self.controller.flip_modes:
+                command = self.controller.flip_modes[command_key]
+            elif command_key in self.controller.nuc_tables:
+                command = self.controller.nuc_tables[command_key]
+            elif command_key in self.controller.gamma_values:
+                command = self.controller.gamma_values[command_key]
+            
+            if command:
+                self.controller.send_command(command, lambda msg: print(msg))
+            else:
+                print(f"Команда '{command_key}' не найдена")
+        except Exception as e:
+            print(f"Ошибка при отправке команды '{display_name}': {e}")
 
 
 class MainWindow(QMainWindow):
@@ -838,7 +915,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         self.setWindowTitle("MINIR Термокамера - Контроллер")
-        self.setGeometry(200, 200, 500, 600)
+        self.setGeometry(100, 100, 900, 700)
         
         # Центральный виджет
         central_widget = QWidget()
