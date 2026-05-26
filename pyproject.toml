@@ -43,7 +43,7 @@ dev = [
 ]
 
 [project.scripts]
-minir-gui = "main_pyqt_claude:main"
+minir-gui = "main:main"
 
 [project.urls]
 Homepage = "https://github.com/your-repo/minir-gui"
