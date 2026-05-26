@@ -347,6 +347,12 @@ class ControlTab(QWidget):
         btn.clicked.connect(handler)
         return btn
 
+    def set_buttons_enabled(self, enabled):
+        """Установка состояния активности для всех кнопок на вкладке"""
+        for child in self.findChildren(QPushButton):
+            if child != getattr(self, 'connect_btn', None):  # Не изменяем состояние кнопки подключения
+                child.setEnabled(enabled)
+
     def send_command_safe(self, command_key, display_name):
         """Безопасная отправка команды — ищет по всем словарям контроллера"""
         try:
@@ -390,6 +396,11 @@ class ControlTab(QWidget):
             
             if parent:
                 parent.update_status(f"Ошибка при отправке команды '{display_name}': {e}")
+
+    def set_sliders_enabled(self, enabled):
+        """Установка состояния активности для всех слайдеров на вкладке"""
+        for child in self.findChildren(QSlider):
+            child.setEnabled(enabled)
 
 
 class BasicControlsTab(ControlTab):
@@ -545,6 +556,15 @@ class ImageControlsTab(ControlTab):
         self.layout.addWidget(cross_group)
         
         self.layout.addStretch()
+
+    def set_sliders_enabled(self, enabled):
+        """Установка состояния активности для всех слайдеров на вкладке"""
+        self.brightness_slider.setEnabled(enabled)
+        self.gain_slider.setEnabled(enabled)
+        self.dde_slider.setEnabled(enabled)
+        self.filter_slider.setEnabled(enabled)
+        self.cross_x_slider.setEnabled(enabled)
+        self.cross_y_slider.setEnabled(enabled)
     
     def on_brightness_changed(self, value):
         self.brightness_label.setText(str(value))
@@ -784,14 +804,14 @@ class AdvancedControlsTab(ControlTab):
         self.gamma_slider.setRange(0, 23)
         self.gamma_slider.setValue(12)
         self.gamma_label = QLabel("12")
-        self.gamma_slider.valueChanged.connect(self.on_gamma_changed)
         gamma_layout.addWidget(self.gamma_slider)
         gamma_layout.addWidget(self.gamma_label)
+        self.gamma_slider.valueChanged.connect(self.on_gamma_changed)
         gamma_group.setLayout(gamma_layout)
         self.layout.addWidget(gamma_group)
         
         # NUC таблицы
-        nuc_group = QGroupBox("NUC Таблицы")
+        nuc_group = QGroupBox("NUC таблицы")
         nuc_layout = QHBoxLayout()
         nuc_layout.addWidget(self.create_button_with_style("Таблица 0", self.nuc_table_0))
         nuc_layout.addWidget(self.create_button_with_style("Таблица 1", self.nuc_table_1))
@@ -1196,6 +1216,7 @@ class MainWindow(QMainWindow):
         self.controller = ThermalCameraController()
         self.init_ui()
         self.apply_theme()
+        self.update_ui_for_connection_status()
     
     def init_ui(self):
         self.setWindowTitle("MINIR Термокамера - Контроллер")
@@ -1215,10 +1236,15 @@ class MainWindow(QMainWindow):
         
         # Вкладки управления
         self.tabs = QTabWidget()
-        self.tabs.addTab(BasicControlsTab(self.controller), "Базовое управление")
-        self.tabs.addTab(ImageControlsTab(self.controller), "Управление изображением")
-        self.tabs.addTab(AdvancedControlsTab(self.controller), "Расширенное управление")
-        self.tabs.addTab(ManualControlsTab(self.controller), "Ручное управление")
+        self.basic_controls_tab = BasicControlsTab(self.controller)
+        self.image_controls_tab = ImageControlsTab(self.controller)
+        self.advanced_controls_tab = AdvancedControlsTab(self.controller)
+        self.manual_controls_tab = ManualControlsTab(self.controller)
+        
+        self.tabs.addTab(self.basic_controls_tab, "Базовое управление")
+        self.tabs.addTab(self.image_controls_tab, "Управление изображением")
+        self.tabs.addTab(self.advanced_controls_tab, "Расширенное управление")
+        self.tabs.addTab(self.manual_controls_tab, "Ручное управление")
         
         main_layout.addWidget(self.tabs)
         
@@ -1313,21 +1339,38 @@ class MainWindow(QMainWindow):
         """Обновление строки состояния с возможностью очистки через определенное время"""
         self.status_bar.showMessage(message, timeout)
     
+    def update_ui_for_connection_status(self):
+        """Обновление UI в зависимости от статуса подключения"""
+        is_connected = self.controller.is_connected
+        
+        # Обновление текста кнопки подключения
+        if is_connected:
+            self.connection_panel.connect_btn.setText("Отключить")
+        else:
+            self.connection_panel.connect_btn.setText("Подключить")
+        
+        # Включение/выключение всех кнопок и слайдеров на всех вкладках
+        for tab in [self.basic_controls_tab, self.image_controls_tab, self.advanced_controls_tab, self.manual_controls_tab]:
+            if hasattr(tab, 'set_buttons_enabled'):
+                tab.set_buttons_enabled(is_connected)
+            if hasattr(tab, 'set_sliders_enabled'):
+                tab.set_sliders_enabled(is_connected)
+    
     def toggle_connection(self):
         """Переключение состояния подключения"""
         if self.controller.is_connected:
             self.controller.disconnect()
-            self.connection_panel.connect_btn.setText("Подключить")
             self.status_bar.showMessage("Отключено")
         else:
             port = self.connection_panel.port_combo.currentText()
             baudrate = int(self.connection_panel.baudrate_combo.currentText())
             if self.controller.connect(port, baudrate):
-                self.connection_panel.connect_btn.setText("Отключить")
                 self.status_bar.showMessage(f"Подключено к {port} на скорости {baudrate} бод")
             else:
                 self.status_bar.showMessage(f"Ошибка подключения к {port}")
-    
+        
+        # Обновляем UI после изменения состояния подключения
+        self.update_ui_for_connection_status()
 
 
 def main():

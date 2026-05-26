@@ -16,7 +16,7 @@ fi
 
 # Проверяем наличие основного файла приложения
 if [ ! -f "main.py" ]; then
-    echo "Ошибка: файл main_pyqt_claude.py не найден!"
+    echo "Ошибка: файл main.py не найден!"
     exit 1
 fi
 
